@@ -1,0 +1,146 @@
+#include <netinet/in.h>  // Structure for storing address information
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/socket.h>  // For socket APIs
+#include <sys/types.h>
+#include <syslog.h>
+#include <arpa/inet.h>
+#include <string.h>
+#include <unistd.h>
+
+// Logs the client's IP address
+void log_client_ip(int client_socket) {
+    struct sockaddr_in client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    char client_ip[INET_ADDRSTRLEN];
+
+    if (getpeername(client_socket, (struct sockaddr *)&client_addr, &addr_len) == -1) {
+        perror("getpeername failed");
+        syslog(LOG_ERR, "getpeername failed");
+        return;
+    }
+
+    if (inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, sizeof(client_ip)) == NULL) {
+        perror("inet_ntop failed");
+        syslog(LOG_ERR, "inet_ntop failed");
+        return;
+    }
+
+    openlog("MyServer", LOG_PID | LOG_CONS, LOG_USER);
+    syslog(LOG_INFO, "Accepted Connection from %s", client_ip);
+    closelog();
+
+    printf("Accepted Connection from %s\n", client_ip);
+}
+
+int main() {
+    int server_fd, client_fd;
+    struct sockaddr_in serv_addr, client_addr;
+    socklen_t addr_len = sizeof(client_addr);
+    char buffer[1024];
+    ssize_t bytes_received, bytes_read;
+
+    // Create server socket
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd == -1) {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    // Configure server address
+    serv_addr.sin_family = AF_INET;
+    serv_addr.sin_port = htons(9000);
+    serv_addr.sin_addr.s_addr = INADDR_ANY;
+
+    // Bind socket
+    if (bind(server_fd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) == -1) {
+        perror("Bind failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    // Listen for connections
+    if (listen(server_fd, 5) == -1) {
+        perror("Listen failed");
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Server listening on port 9000...\n");
+
+    // Accept connection
+    while(1){
+    client_fd = accept(server_fd, (struct sockaddr*)&client_addr, &addr_len);
+    if (client_fd == -1) {
+        perror("Accept failed");
+        close(server_fd);
+        continue;  // Keep listening for new clients
+    }
+
+    log_client_ip(client_fd);
+
+    // Open file for appending data
+    FILE* client_data = fopen("/var/tmp/aesdsocketdata", "a+");	
+    if (!client_data) {
+        perror("File open failed");
+        close(client_fd);
+        close(server_fd);
+        exit(EXIT_FAILURE);
+    }
+
+
+    // Receive data from client
+    printf("Recieving data. . . . :");
+    while ((bytes_received = recv(client_fd, buffer, sizeof(buffer) - 1, 0)) > 0) {
+        buffer[bytes_received] = '\0';
+
+        // Write data to file
+        printf("%.*s", (int)bytes_received, buffer);
+        if (fwrite(buffer, 1, bytes_received, client_data) < (size_t)bytes_received) {
+            perror("File write failed");
+            fclose(client_data);
+            close(client_fd);
+            close(server_fd);
+            exit(EXIT_FAILURE);
+        }
+
+        // Ensure data is written to disk before reading
+        fflush(client_data);
+
+        // If newline is found, send file contents to client
+        if (strchr(buffer, '\n')) {
+            FILE* send_data = fopen("/var/tmp/aesdsocketdata", "r");
+            if (!send_data) {
+                perror("File open failed for reading");
+                fclose(client_data);
+                close(client_fd);
+                close(server_fd);
+                exit(EXIT_FAILURE);
+            }
+
+            printf("\nSending file contents:");
+            while ((bytes_read = fread(buffer, 1, sizeof(buffer), send_data)) > 0) {
+                if (send(client_fd, buffer, bytes_read, 0) == -1) {
+                    perror("Send failed");
+                    fclose(send_data);
+                    fclose(client_data);
+                    close(client_fd);
+                    close(server_fd);
+                    exit(EXIT_FAILURE);
+                }
+                printf("%.*s", (int)bytes_read, buffer);
+            }
+            printf("\n");
+            fclose(send_data);
+        }
+    }
+
+    // Cleanup
+    printf("Cleaning up data. . . . \n");
+    fclose(client_data);
+    close(client_fd);
+    close(server_fd);
+}
+
+    return 0;
+}
