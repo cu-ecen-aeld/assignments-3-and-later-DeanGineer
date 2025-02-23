@@ -47,4 +47,20 @@ case "$1" in
             if kill -0 "$PID" 2>/dev/null; then
                 echo "aesdsocket is running with PID $PID."
                 exit 0
-   
+            else
+                echo "PID file exists but process is not running."
+                exit 1
+            fi
+        else
+            echo "aesdsocket is not running."
+            exit 1
+        fi
+        ;;
+    
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+
+exit 0
